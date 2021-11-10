@@ -38,6 +38,15 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <sstream>
+#include <list>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -45,7 +54,46 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Analysis/CFGPrinter.h"
+
+#if defined(LLVM34)
+#include "llvm/DebugInfo.h"
+#else
+#include "llvm/IR/DebugInfo.h"
+#endif
+
+#if defined(LLVM34) || defined(LLVM35) || defined(LLVM36)
+#define LLVM_OLD_DEBUG_API
+#endif
+
 using namespace llvm;
+
+namespace llvm {
+
+template<>
+struct DOTGraphTraits<Function*> : public DefaultDOTGraphTraits { //重写DOTGraphTraits
+  DOTGraphTraits(bool isSimple=true) : DefaultDOTGraphTraits(isSimple) {}
+
+  static std::string getGraphName(Function *F) {
+    return "CFG for '" + F->getName().str() + "' function";
+  }
+
+  std::string getNodeLabel(BasicBlock *Node, Function *Graph) {
+    if (!Node->getName().empty()) {
+      return Node->getName().str();
+    }
+
+    std::string Str;
+    raw_string_ostream OS(Str);
+
+    Node->printAsOperand(OS, false);
+    return OS.str();
+  }
+};
+}//namespace llvm
 
 namespace {
 
@@ -69,6 +117,59 @@ namespace {
 
 char AFLCoverage::ID = 0;
 
+static void getDebugLoc(const Instruction *I, std::string &Filename,
+                        unsigned &Line) { //获取指令的文件位置
+#ifdef LLVM_OLD_DEBUG_API
+  DebugLoc Loc = I->getDebugLoc();
+  if (!Loc.isUnknown()) {
+    DILocation cDILoc(Loc.getAsMDNode(M.getContext()));
+    DILocation oDILoc = cDILoc.getOrigLocation();
+
+    Line = oDILoc.getLineNumber();
+    Filename = oDILoc.getFilename().str();
+
+    if (filename.empty()) {
+      Line = cDILoc.getLineNumber();
+      Filename = cDILoc.getFilename().str();
+    }
+  }
+#else
+  if (DILocation *Loc = I->getDebugLoc()) {
+    Line = Loc->getLine();
+    Filename = Loc->getFilename().str();
+
+    if (Filename.empty()) {
+      DILocation *oDILoc = Loc->getInlinedAt();
+      if (oDILoc) {
+        Line = oDILoc->getLine();
+        Filename = oDILoc->getFilename().str();
+      }
+    }
+  }
+#endif /* LLVM_OLD_DEBUG_API */
+}
+
+static bool isBlacklisted(const Function *F) { //黑名单函数，在遍历到这些函数时特殊处理
+  static const SmallVector<std::string, 8> Blacklist = {
+    "asan.",
+    "llvm.",
+    "sancov.",
+    "__ubsan_handle_",
+    "free",
+    "malloc",
+    "calloc",
+    "realloc"
+  };
+
+  for (auto const &BlacklistFunc : Blacklist) {
+    if (F->getName().startswith(BlacklistFunc)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 
 bool AFLCoverage::runOnModule(Module &M) {
 
@@ -76,6 +177,8 @@ bool AFLCoverage::runOnModule(Module &M) {
 
   IntegerType *Int8Ty  = IntegerType::getInt8Ty(C);
   IntegerType *Int32Ty = IntegerType::getInt32Ty(C);
+
+  //SAYF(cCYA "aflgo-llvm-pass (yeah!) " cBRI VERSION cRST " (%s mode)\n",(true ? "preprocessing" : "distance instrumentation")); //这是一个可以直接在终端打印的函数
 
   /* Show a banner */
 
@@ -99,6 +202,12 @@ bool AFLCoverage::runOnModule(Module &M) {
       FATAL("Bad value of AFL_INST_RATIO (must be between 1 and 100)");
 
   }
+
+  //构建ICFG
+  
+
+
+
 
   /* Get globals for the SHM region and the previous location. Note that
      __afl_prev_loc is thread-local. */
