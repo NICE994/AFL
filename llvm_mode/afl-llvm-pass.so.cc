@@ -71,6 +71,11 @@
 
 using namespace llvm;
 
+cl::opt<std::string> OutDirectory(
+    "outdir",
+    cl::desc("Output directory where Ftargets.txt, Fnames.txt, and BBnames.txt are generated."),
+    cl::value_desc("outdir"));
+
 namespace llvm {
 
 template<>
@@ -204,10 +209,105 @@ bool AFLCoverage::runOnModule(Module &M) {
   }
 
   //构建ICFG
+  int inst_block = 0; //插桩代码
+
+  //if(is_aflgo_preprocessing){
+  if(true){
+    std::ofstream bbnames(OutDirectory + "/BBnames.txt", std::ofstream::out | std::ofstream::app);
+    std::ofstream bbcalls(OutDirectory + "/BBcalls.txt", std::ofstream::out | std::ofstream::app);
+    std::ofstream fnames(OutDirectory + "/Fnames.txt", std::ofstream::out | std::ofstream::app);
+    std::ofstream ftargets(OutDirectory + "/Ftargets.txt", std::ofstream::out | std::ofstream::app);
+
+    /* Create dot-files directory */
+    std::string dotfiles(OutDirectory + "/dot-files");
+    //std::string dotfiles("/home/xy/Desktop/dot-files");
+
+    SAYF(cCYA "dotfiles " cBRI VERSION cRST " (%s mode)\n",dotfiles.c_str());
+    
+    if (sys::fs::create_directory(dotfiles)) {
+      FATAL("Could not create directory %s.", dotfiles.c_str());
+    }
+
+    for (auto &F : M) {
+
+      bool has_BBs = false;
+      std::string funcName = F.getName().str();
+
+      /* Black list of function names */
+      if (isBlacklisted(&F)) {
+        continue;
+      }
+
+      bool is_target = false;
+      for (auto &BB : F) {
+
+        std::string bb_name("");
+        std::string filename;
+        unsigned line;
+
+        for (auto &I : BB) { //对基本块中的每条指令进行处理；
+
+          getDebugLoc(&I, filename, line);
+
+          /* Don't worry about external libs */
+          static const std::string Xlibs("/usr/");
+          if (filename.empty() || line == 0 || !filename.compare(0, Xlibs.size(), Xlibs))
+            continue;
+
+          if (bb_name.empty()) {
+
+            std::size_t found = filename.find_last_of("/\\");
+            if (found != std::string::npos)
+              filename = filename.substr(found + 1);
+
+            bb_name = filename + ":" + std::to_string(line);//为每个基本块使用文件名:行数的方法命名了
+          }
+
+          if (auto *c = dyn_cast<CallInst>(&I)) {//动态转换，判断I是否是callinst
+
+              std::size_t found = filename.find_last_of("/\\");
+              if (found != std::string::npos)
+                filename = filename.substr(found + 1);
+
+              if (auto *CalledF = c->getCalledFunction()) {//得到调用函数的文件位置，被调用的函数
+                if (!isBlacklisted(CalledF)){
+                  bbcalls << bb_name << "," << CalledF->getName().str() << "\n";
+                }
+              }
+          }
+        }
+
+        if (!bb_name.empty()) {
+
+          BB.setName(bb_name + ":");
+          if (!BB.hasName()) {
+            std::string newname = bb_name + ":";
+            Twine t(newname);
+            SmallString<256> NameData;
+            StringRef NameRef = t.toStringRef(NameData);
+            MallocAllocator Allocator;
+            BB.setValueName(ValueName::Create(NameRef, Allocator));
+          }
+
+          bbnames << BB.getName().str() << "\n";
+          has_BBs = true;  //对应的Function含有BB
+
+        }
+
+      }
+
+      if (has_BBs) {
+        /* Print CFG */
+        std::string cfgFileName = dotfiles + "/cfg." + funcName + ".dot";
+        std::error_code EC;
+        raw_fd_ostream cfgFile(cfgFileName, EC, sys::fs::F_None);
+        if (!EC) {
+          WriteGraph(cfgFile, &F, true); //不再对function级画Intraprocedure控制流图
+        }
+      }
+    }
   
-
-
-
+  }
 
   /* Get globals for the SHM region and the previous location. Note that
      __afl_prev_loc is thread-local. */
