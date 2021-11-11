@@ -71,10 +71,13 @@
 
 using namespace llvm;
 
-cl::opt<std::string> OutDirectory(
+/*
+cl::opt<std::string> OutDirectory( //没有读到对应的参数
     "outdir",
     cl::desc("Output directory where Ftargets.txt, Fnames.txt, and BBnames.txt are generated."),
     cl::value_desc("outdir"));
+    */
+std::string OutDirectory("/home/xy/Desktop/test");
 
 namespace llvm {
 
@@ -222,7 +225,7 @@ bool AFLCoverage::runOnModule(Module &M) {
     std::string dotfiles(OutDirectory + "/dot-files");
     //std::string dotfiles("/home/xy/Desktop/dot-files");
 
-    SAYF(cCYA "dotfiles " cBRI VERSION cRST " (%s mode)\n",dotfiles.c_str());
+    SAYF(cCYA "OutDirectory " cBRI VERSION cRST " (%s mode)\n",OutDirectory.c_str());
     
     if (sys::fs::create_directory(dotfiles)) {
       FATAL("Could not create directory %s.", dotfiles.c_str());
@@ -272,6 +275,7 @@ bool AFLCoverage::runOnModule(Module &M) {
               if (auto *CalledF = c->getCalledFunction()) {//得到调用函数的文件位置，被调用的函数
                 if (!isBlacklisted(CalledF)){
                   bbcalls << bb_name << "," << CalledF->getName().str() << "\n";
+                  
                 }
               }
           }
@@ -280,7 +284,8 @@ bool AFLCoverage::runOnModule(Module &M) {
         if (!bb_name.empty()) {
 
           BB.setName(bb_name + ":");
-          if (!BB.hasName()) {
+          //SAYF(cCYA "bb_name " cBRI VERSION cRST " (%s mode)\n",BB.getName().str().c_str());
+          if (!BB.hasName()) { //这一段代码应该是不会被执行的？？
             std::string newname = bb_name + ":";
             Twine t(newname);
             SmallString<256> NameData;
