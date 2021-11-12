@@ -88,6 +88,23 @@ cl::opt<std::string> OutDirectory( //没有读到对应的参数
     cl::desc("Output directory where Ftargets.txt, Fnames.txt, and BBnames.txt are generated."),
     cl::value_desc("outdir"));
     */
+
+static cl::opt<bool> ShowHeatColors("callgraph-heat-colors", cl::init(false),
+                                    cl::Hidden,
+                                    cl::desc("Show heat colors in call-graph"));
+
+static cl::opt<bool>
+    ShowEdgeWeight("callgraph-show-weights", cl::init(false), cl::Hidden,
+                       cl::desc("Show edges labeled with weights"));
+
+static cl::opt<bool>
+    CallMultiGraph("callgraph-multigraph", cl::init(false), cl::Hidden,
+            cl::desc("Show call-multigraph (do not remove parallel edges)"));
+
+static cl::opt<std::string> CallGraphDotFilenamePrefix(
+    "callgraph-dot-filename-prefix", cl::Hidden,
+    cl::desc("The prefix used for the CallGraph dot file names."));
+
 std::string OutDirectory("/home/xy/Desktop/test");
 
 namespace llvm {
@@ -151,6 +168,109 @@ private:
     }
   }
   };
+
+template <>
+struct GraphTraits<CallGraphDOTInfo *>
+    : public GraphTraits<const CallGraphNode *> {
+  static NodeRef getEntryNode(CallGraphDOTInfo *CGInfo) {
+    // Start at the external node!
+    return CGInfo->getCallGraph()->getExternalCallingNode();
+  }
+
+  typedef std::pair<const Function *const, std::unique_ptr<CallGraphNode>>
+      PairTy;
+  static const CallGraphNode *CGGetValuePtr(const PairTy &P) {
+    return P.second.get();
+  }
+
+  // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
+  typedef mapped_iterator<CallGraph::const_iterator, decltype(&CGGetValuePtr)>
+      nodes_iterator;
+
+  static nodes_iterator nodes_begin(CallGraphDOTInfo *CGInfo) {
+    return nodes_iterator(CGInfo->getCallGraph()->begin(), &CGGetValuePtr);
+  }
+  static nodes_iterator nodes_end(CallGraphDOTInfo *CGInfo) {
+    return nodes_iterator(CGInfo->getCallGraph()->end(), &CGGetValuePtr);
+  }
+};
+
+template <>
+struct DOTGraphTraits<CallGraphDOTInfo *> : public DefaultDOTGraphTraits {
+
+  DOTGraphTraits(bool isSimple = false) : DefaultDOTGraphTraits(isSimple) {}
+
+  static std::string getGraphName(CallGraphDOTInfo *CGInfo) {
+    return "Call graph: " +
+           std::string(CGInfo->getModule()->getModuleIdentifier());
+  }
+
+  static bool isNodeHidden(const CallGraphNode *Node,
+                           const CallGraphDOTInfo *CGInfo) {
+    if (CallMultiGraph || Node->getFunction())
+      return false;
+    return true;
+  }
+
+  std::string getNodeLabel(const CallGraphNode *Node,
+                           CallGraphDOTInfo *CGInfo) {
+    if (Node == CGInfo->getCallGraph()->getExternalCallingNode())
+      return "external caller";
+    if (Node == CGInfo->getCallGraph()->getCallsExternalNode())
+      return "external callee";
+
+    if (Function *Func = Node->getFunction())
+      return std::string(Func->getName());
+    return "external node";
+  }
+  static const CallGraphNode *CGGetValuePtr(CallGraphNode::CallRecord P) {
+    return P.second;
+  }
+
+  // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
+  typedef mapped_iterator<CallGraphNode::const_iterator,
+                          decltype(&CGGetValuePtr)>
+      nodes_iterator;
+
+  std::string getEdgeAttributes(const CallGraphNode *Node, nodes_iterator I,
+                                CallGraphDOTInfo *CGInfo) {
+    if (!ShowEdgeWeight)
+      return "";
+
+    Function *Caller = Node->getFunction();
+    if (Caller == nullptr || Caller->isDeclaration())
+      return "";
+
+    Function *Callee = (*I)->getFunction();
+    if (Callee == nullptr)
+      return "";
+
+    uint64_t Counter = getNumOfCalls(*Caller, *Callee);
+    double Width =
+        1 + 2 * (double(Counter) / CGInfo->getMaxFreq());
+    std::string Attrs = "label=\"" + std::to_string(Counter) +
+                        "\" penwidth=" + std::to_string(Width);
+    return Attrs;
+  }
+
+  std::string getNodeAttributes(const CallGraphNode *Node,
+                                CallGraphDOTInfo *CGInfo) {
+    Function *F = Node->getFunction();
+    if (F == nullptr)
+      return "";
+    std::string attrs;
+    if (ShowHeatColors) {
+      uint64_t freq = CGInfo->getFreq(F);
+      std::string color = getHeatColor(freq, CGInfo->getMaxFreq());
+      std::string edgeColor = (freq <= (CGInfo->getMaxFreq() / 2))
+                                  ? getHeatColor(0)
+                                  : getHeatColor(1);
+      attrs = "color=\"" + edgeColor + "ff\", style=filled, fillcolor=\"" +
+              color + "80\"";
+    }
+    return attrs;
+  }
+};
 
 template<>
 struct DOTGraphTraits<Function*> : public DefaultDOTGraphTraits { //重写DOTGraphTraits
@@ -283,7 +403,7 @@ bool AFLCoverage::runOnModule(Module &M) {
   }
 
   //构建ICFG
-  int inst_block = 0; //插桩代码
+  //int inst_block = 0; //插桩代码
 
   //if(is_aflgo_preprocessing){
   if(true){
@@ -312,7 +432,7 @@ bool AFLCoverage::runOnModule(Module &M) {
         continue;
       }
 
-      bool is_target = false;
+      //bool is_target = false;
       for (auto &BB : F) {
 
         std::string bb_name("");
@@ -406,6 +526,13 @@ bool AFLCoverage::runOnModule(Module &M) {
     raw_fd_ostream cgFile(cgFilename, cgEC, sys::fs::OF_Text);
 
     CallGraph CG(M);
+    //调用CallGraph的print（）
+    std::string CGprintN = dotfiles + "/cgprint.txt";
+    std::error_code cgpEC;
+    raw_fd_ostream cgpFile(CGprintN, cgpEC, sys::fs::F_None);
+
+    CG.print(cgpFile);
+
     CallGraphDOTInfo CFGInfo(&M, &CG, LookupBFI);
 
     if (!cgEC)
