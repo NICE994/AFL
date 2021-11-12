@@ -57,7 +57,18 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Analysis/CFGPrinter.h"
+//#include "llvm/Analysis/CFGPrinter.h"
+
+#include "llvm/Analysis/CallPrinter.h"
+#include "llvm/Analysis/BlockFrequencyInfo.h"
+//#include "llvm/Analysis/BranchProbabilityInfo.h"
+#include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/DOTGraphTraitsPass.h"
+#include "llvm/Analysis/HeatUtils.h"
+//#include "llvm/Support/CommandLine.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallSet.h"
 
 #if defined(LLVM34)
 #include "llvm/DebugInfo.h"
@@ -80,6 +91,66 @@ cl::opt<std::string> OutDirectory( //没有读到对应的参数
 std::string OutDirectory("/home/xy/Desktop/test");
 
 namespace llvm {
+
+  class CallGraphDOTInfo {
+private:
+  Module *M;
+  CallGraph *CG;
+  DenseMap<const Function *, uint64_t> Freq;
+  uint64_t MaxFreq;
+
+public:
+  std::function<BlockFrequencyInfo *(Function &)> LookupBFI;
+
+  CallGraphDOTInfo(Module *M, CallGraph *CG,
+                   function_ref<BlockFrequencyInfo *(Function &)> LookupBFI)
+      : M(M), CG(CG), LookupBFI(LookupBFI) {
+    MaxFreq = 0;
+
+    for (Function &F : M->getFunctionList()) {
+      uint64_t localSumFreq = 0;
+      SmallSet<Function *, 16> Callers; //构建一个集合，caller的集合
+      for (User *U : F.users())
+        if (isa<CallInst>(U))
+          Callers.insert(cast<Instruction>(U)->getFunction());
+      for (Function *Caller : Callers)
+        localSumFreq += getNumOfCalls(*Caller, F);
+      if (localSumFreq >= MaxFreq)
+        MaxFreq = localSumFreq;
+      Freq[&F] = localSumFreq;
+    }
+    //if (!CallMultiGraph)
+      //removeParallelEdges();
+  }
+
+  Module *getModule() const { return M; }
+
+  CallGraph *getCallGraph() const { return CG; }
+
+  uint64_t getFreq(const Function *F) { return Freq[F]; }
+
+  uint64_t getMaxFreq() { return MaxFreq; }
+
+private:
+  void removeParallelEdges() {
+    for (auto &I : (*CG)) {
+      CallGraphNode *Node = I.second.get();
+
+      bool FoundParallelEdge = true;
+      while (FoundParallelEdge) {
+        SmallSet<Function *, 16> Visited;
+        FoundParallelEdge = false;
+        for (auto CI = Node->begin(), CE = Node->end(); CI != CE; CI++) {
+          if (!(Visited.insert(CI->second->getFunction())).second) {
+            FoundParallelEdge = true;
+            Node->removeCallEdge(CI);
+            break;
+          }
+        }
+      }
+    }
+  }
+  };
 
 template<>
 struct DOTGraphTraits<Function*> : public DefaultDOTGraphTraits { //重写DOTGraphTraits
@@ -307,11 +378,41 @@ bool AFLCoverage::runOnModule(Module &M) {
         std::error_code EC;
         raw_fd_ostream cfgFile(cfgFileName, EC, sys::fs::F_None);
         if (!EC) {
-          WriteGraph(cfgFile, &F, true); //不再对function级画Intraprocedure控制流图
+          //WriteGraph(cfgFile, &F, true); //不再对function级画Intraprocedure控制流图
         }
       }
     }
-  
+
+    /* 尝试打印module里的Function图 
+    std::string cfgFileName_function = dotfiles + "/cfg-function." + M.getName().str() + ".dot";
+    std::error_code EC2;
+    raw_fd_ostream cfgFile_function(cfgFileName_function, EC2, sys::fs::F_None);
+    if (!EC2)
+    {
+      //WriteGraph(cfgFile_function, &M, true); //不再对function级画Intraprocedure控制流图
+      //不能直接对Module进行打印，需要进行转换
+    }*/
+
+    auto LookupBFI = [this](Function &F)
+    {
+      return &this->getAnalysis<BlockFrequencyInfoWrapperPass>(F).getBFI();
+    };
+
+    std::string cgFilename;
+    cgFilename = (OutDirectory + ".callgraph.dot");
+    SAYF(cCYA "cgFilename " cBRI VERSION cRST " (%s mode)\n",cgFilename.c_str());
+
+    std::error_code cgEC;
+    raw_fd_ostream cgFile(cgFilename, cgEC, sys::fs::OF_Text);
+
+    CallGraph CG(M);
+    CallGraphDOTInfo CFGInfo(&M, &CG, LookupBFI);
+
+    if (!cgEC)
+      WriteGraph(cgFile, &CFGInfo);
+    else
+      errs() << "  error opening file for writing!";
+    errs() << "\n";
   }
 
   /* Get globals for the SHM region and the previous location. Note that
