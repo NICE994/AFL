@@ -87,7 +87,7 @@ cl::opt<std::string> OutDirectory( //没有读到对应的参数
     "outdir",
     cl::desc("Output directory where Ftargets.txt, Fnames.txt, and BBnames.txt are generated."),
     cl::value_desc("outdir"));
-    */
+    
 
 static cl::opt<bool> ShowHeatColors("callgraph-heat-colors", cl::init(false),
                                     cl::Hidden,
@@ -104,8 +104,13 @@ static cl::opt<bool>
 static cl::opt<std::string> CallGraphDotFilenamePrefix(
     "callgraph-dot-filename-prefix", cl::Hidden,
     cl::desc("The prefix used for the CallGraph dot file names."));
+*/
 
 std::string OutDirectory("/home/xy/Desktop/test");
+int ShowHeatColors = 0;
+int ShowEdgeWeight = 0;
+bool CallMultiGraph = false;
+std::string CallGraphDotFilenamePrefix("cgg");
 
 namespace llvm {
 
@@ -205,12 +210,14 @@ struct DOTGraphTraits<CallGraphDOTInfo *> : public DefaultDOTGraphTraits {
            std::string(CGInfo->getModule()->getModuleIdentifier());
   }
 
+  /*xy
   static bool isNodeHidden(const CallGraphNode *Node,
                            const CallGraphDOTInfo *CGInfo) {
     if (CallMultiGraph || Node->getFunction())
       return false;
     return true;
   }
+  */
 
   std::string getNodeLabel(const CallGraphNode *Node,
                            CallGraphDOTInfo *CGInfo) {
@@ -498,7 +505,7 @@ bool AFLCoverage::runOnModule(Module &M) {
         std::error_code EC;
         raw_fd_ostream cfgFile(cfgFileName, EC, sys::fs::F_None);
         if (!EC) {
-          //WriteGraph(cfgFile, &F, true); //不再对function级画Intraprocedure控制流图
+          WriteGraph(cfgFile, &F, true); //不再对function级画Intraprocedure控制流图
         }
       }
     }
@@ -519,7 +526,7 @@ bool AFLCoverage::runOnModule(Module &M) {
     };
 
     std::string cgFilename;
-    cgFilename = (OutDirectory + ".callgraph.dot");
+    cgFilename = (OutDirectory + "/dot-files/cg.callgraph.dot");
     SAYF(cCYA "cgFilename " cBRI VERSION cRST " (%s mode)\n",cgFilename.c_str());
 
     std::error_code cgEC;
