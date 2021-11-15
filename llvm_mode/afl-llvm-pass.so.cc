@@ -38,12 +38,31 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <sstream>
+#include <list>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+
+
+
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Analysis/CFGPrinter.h"
+
+
+#include "llvm/IR/DebugInfoMetadata.h"
 
 using namespace llvm;
 
@@ -68,6 +87,38 @@ namespace {
 
 
 char AFLCoverage::ID = 0;
+
+static void getDebugLoc(const Instruction *I, std::string &Filename,
+                        unsigned &Line) {
+#ifdef LLVM_OLD_DEBUG_API
+  DebugLoc Loc = I->getDebugLoc();
+  if (!Loc.isUnknown()) {
+    DILocation cDILoc(Loc.getAsMDNode(M.getContext()));
+    DILocation oDILoc = cDILoc.getOrigLocation();
+
+    Line = oDILoc.getLineNumber();
+    Filename = oDILoc.getFilename().str();
+
+    if (filename.empty()) {
+      Line = cDILoc.getLineNumber();
+      Filename = cDILoc.getFilename().str();
+    }
+  }
+#else
+  if (DILocation *Loc = I->getDebugLoc()) {
+    Line = Loc->getLine();
+    Filename = Loc->getFilename().str();
+
+    if (Filename.empty()) {
+      DILocation *oDILoc = Loc->getInlinedAt();
+      if (oDILoc) {
+        Line = oDILoc->getLine();
+        Filename = oDILoc->getFilename().str();
+      }
+    }
+  }
+#endif /* LLVM_OLD_DEBUG_API */
+}
 
 
 bool AFLCoverage::runOnModule(Module &M) {
@@ -115,8 +166,45 @@ bool AFLCoverage::runOnModule(Module &M) {
 
   int inst_blocks = 0;
 
-  for (auto &F : M)
+  for (auto &F : M){
     for (auto &BB : F) {
+
+      std::string bb_name("");
+      std::string filename;
+      unsigned line;
+
+      for (auto &I : BB) { 
+        getDebugLoc(&I, filename, line);
+
+        /* Don't worry about external libs */
+          static const std::string Xlibs("/usr/");
+          if (filename.empty() || line == 0 || !filename.compare(0, Xlibs.size(), Xlibs))
+            continue;
+
+          if (bb_name.empty()) {
+
+            std::size_t found = filename.find_last_of("/\\");
+            if (found != std::string::npos)
+              filename = filename.substr(found + 1);
+
+            bb_name = filename + ":" + std::to_string(line);//为每个基本块使用文件名:行数的方法命名了
+          }
+
+        if (!bb_name.empty()) {
+
+          //I.setName(bb_name + ":");
+          /*
+          if (!I.hasName()) {
+            std::string newname = bb_name + ":";
+            Twine t(newname);
+            SmallString<256> NameData;
+            StringRef NameRef = t.toStringRef(NameData);
+            MallocAllocator Allocator;
+            I.setValueName(ValueName::Create(NameRef, Allocator));
+          }
+          */
+
+      }
 
       BasicBlock::iterator IP = BB.getFirstInsertionPt();
       IRBuilder<> IRB(&(*IP));
@@ -160,20 +248,21 @@ bool AFLCoverage::runOnModule(Module &M) {
 
     }
 
-  /* Say something nice. */
+    /* Say something nice. */
 
-  if (!be_quiet) {
+    if (!be_quiet) {
 
-    if (!inst_blocks) WARNF("No instrumentation targets found.");
-    else OKF("Instrumented %u locations (%s mode, ratio %u%%).",
-             inst_blocks, getenv("AFL_HARDEN") ? "hardened" :
-             ((getenv("AFL_USE_ASAN") || getenv("AFL_USE_MSAN")) ?
-              "ASAN/MSAN" : "non-hardened"), inst_ratio);
+      if (!inst_blocks) WARNF("No instrumentation targets found.");
+      else OKF("Instrumented %u locations (%s mode, ratio %u%%).",
+              inst_blocks, getenv("AFL_HARDEN") ? "hardened" :
+              ((getenv("AFL_USE_ASAN") || getenv("AFL_USE_MSAN")) ?
+                "ASAN/MSAN" : "non-hardened"), inst_ratio);
 
+    }
   }
-
+  }
   return true;
-
+  
 }
 
 
