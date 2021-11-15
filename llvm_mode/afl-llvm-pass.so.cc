@@ -141,8 +141,8 @@ public:
         MaxFreq = localSumFreq;
       Freq[&F] = localSumFreq;
     }
-    //if (!CallMultiGraph)
-      //removeParallelEdges();
+    if (!CallMultiGraph)
+      removeParallelEdges();
   }
 
   Module *getModule() const { return M; }
@@ -520,6 +520,7 @@ bool AFLCoverage::runOnModule(Module &M) {
       //不能直接对Module进行打印，需要进行转换
     }*/
 
+    //打印CG
     auto LookupBFI = [this](Function &F)
     {
       return &this->getAnalysis<BlockFrequencyInfoWrapperPass>(F).getBFI();
