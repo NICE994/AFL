@@ -69,5 +69,7 @@
         "stdexcept": "cpp",
         "streambuf": "cpp",
         "typeinfo": "cpp"
-    } // 效果效果比cpptools要好
+    },
+    "editor.suggest.snippetsPreventQuickSuggestions": false, // 效果效果比cpptools要好
+    "[cpp]": {"editor.wordBasedSuggestions": true}
 }
